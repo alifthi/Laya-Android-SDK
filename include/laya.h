@@ -8,6 +8,12 @@ extern "C" {
 typedef struct laya_model   laya_model;
 typedef struct laya_context laya_context;
 
+enum laya_qtype {
+    LAYA_QTYPE_CHOICE = 0,
+    LAYA_QTYPE_SCORE  = 1,
+    LAYA_QTYPE_NOUL   = 2,
+};
+
 struct laya_context_params {
     int32_t n_threads;
 };
