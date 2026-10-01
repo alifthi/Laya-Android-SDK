@@ -33,6 +33,16 @@ struct laya_answer {
     float   confidence;      // 1 - normalized entropy of the calibrated distribution
 };
 
+struct laya_context_params laya_context_default_params(void);
+
+laya_model * laya_model_load(const char * path, struct laya_model_params params);
+
+laya_context * laya_create_context(laya_model * model, struct laya_context_params params);
+
+void laya_model_free(laya_model * model);
+
+void laya_context_free(laya_context * ctx);
+
 #ifdef __cplusplus
 }
 #endif
