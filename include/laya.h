@@ -35,9 +35,9 @@ struct laya_answer {
 
 struct laya_context_params laya_context_default_params(void);
 
-laya_model * laya_model_load(const char * path, struct laya_model_params params);
-
 laya_context * laya_create_context(laya_model * model, struct laya_context_params params);
+
+laya_model * laya_model_load(const char * path, struct laya_model_params params);
 
 void laya_model_free(laya_model * model);
 
