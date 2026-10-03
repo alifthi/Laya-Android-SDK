@@ -2,7 +2,9 @@
 #include "laya.h"
 #include "llama.h"
 #include "ggml.h"
-#include "laya-model.h"
+#include "gguf.h"
+#include "ggml-backend.h"
+
 struct laya_context {
     laya_model *         model  = nullptr;
     ggml_backend_t       cpu    = nullptr;
@@ -29,8 +31,36 @@ struct laya_context_params laya_context_default_params(void) {
 }
 
 int load_weights(laya_model * model, const char * path) {
-    // Stub function to load weights.
-    return 0;
+    const gguf_context * ctx = model->gguf;
+    const size_t offset = gguf_get_data_offset(ctx);
+    const int64_t n = gguf_get_n_tensors(ctx);
+
+    model->buf_w = ggml_backend_alloc_ctx_tensors_from_buft(model->ctx_w, ggml_backend_cpu_buffer_type());
+    if(!model->buf_w) {
+        printf("[Error] failed to allocate the weight buffer");
+        return false;
+    }
+
+    ggml_backend_buffer_set_uage(model->buf_w, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    FILE * f = fopen(path, "rb");
+    if(!f) {
+        printf("[Error] failed to open '%s'", path);
+        return false;
+    }
+    bool res = true;
+    for(int i = 0; i < n; ++i){
+        ggml_tensor * tens = ggml_get_tensor(model->ctx_w, gguf_get_tensor_name(ctx, i));
+        const size_t off = offset + gguf_get_tensor_offset(ctx, i);
+        res = fseeko(f, (off_t) off, SEEK_SET) == 0;
+        res = fread(tens->data, 1, ggml_nbytes(tens), f) == ggml_nbytes(tens);
+        if(!res) {
+            printf("[Error] failed to read tensor '%s'", tens->name);
+            break;
+        }
+    }
+    fclose(f);
+    return res;
 }
 
 laya_model * laya_model_load(const char * path) {
