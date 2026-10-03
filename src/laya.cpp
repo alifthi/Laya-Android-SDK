@@ -2,6 +2,7 @@
 #include "laya.h"
 #include "llama.h"
 #include "ggml.h"
+#include "laya-model.h"
 struct laya_context {
     laya_model *         model  = nullptr;
     ggml_backend_t       cpu    = nullptr;
@@ -26,10 +27,12 @@ struct laya_context_params laya_context_default_params(void) {
     p.n_threads = 0;
     return p;
 }
+
 int load_weights(laya_model * model, const char * path) {
     // Stub function to load weights.
     return 0;
 }
+
 laya_model * laya_model_load(const char * path) {
     
     llama_log_set(silent_log_callback, nullptr);
