@@ -1,11 +1,12 @@
 #ifndef LAYA_H
 #define LAYA_H
 
+#include "laya-model.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef struct laya_model   laya_model;
 typedef struct laya_context laya_context;
 
 enum laya_qtype {
@@ -37,7 +38,11 @@ struct laya_context_params laya_context_default_params(void);
 
 laya_context * laya_create_context(laya_model * model, struct laya_context_params params);
 
-laya_model * laya_model_load(const char * path, struct laya_model_params params);
+int load_params(laya_model * model, const char * path);
+
+int load_weights(laya_model * model, const char * path) 
+
+laya_model * laya_model_load(const char * path);
 
 void laya_model_free(laya_model * model);
 
