@@ -127,4 +127,23 @@ laya_model * laya_model_load(const char * path) {
     return model;
 }
 
+void laya_model_free(laya_model * model){
+    if (!model) {
+        return;
+    }
+    if (model->tok) {
+        llama_model_free(model->tok);
+    }
+    if (model->buf_w) {
+        ggml_backend_buffer_free(model->buf_w);
+    }
+    if (model->ctx_w) {
+        ggml_free(model->ctx_w);
+    }
+    if (model->gguf) {
+        gguf_free(model->gguf);
+    }
+    delete model;
+}
+
 } // extern "C"
