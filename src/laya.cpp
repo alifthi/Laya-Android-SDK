@@ -118,6 +118,11 @@ laya_model * laya_model_load(const char * path) {
         return nullptr;
     }
 
+    if (!load_tokenizer(model, path)){
+        printf("[Error] Failed to load weights.");
+        laya_model_free(model);
+        return nullptr;
+    }
     
     return model;
 }
