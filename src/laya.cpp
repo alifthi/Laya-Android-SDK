@@ -62,59 +62,19 @@ int load_params(laya_model * model, const char * path){
     
     if(!init_general_params(model, ctx)){
         printf("[Error] Failed to initialize general parameters.");
-        return 1;
+        return false;
     }
 
     if(!init_encoder(model, ctx)){
         printf("[Error] Failed to initialize Encoder.");
-        return 1;
-    }
-    
-    //Decision Head
-
-    const int64_t head_ff = ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")?
-                                ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")->ne[1] : 4 * n_embd;;
-
-    model->layers.resize(n_layers);
-    for(int32_t i = 0; i<n_layers; ++i){
-        head_layer & L = model->layers[i];
-        const std::string p = "head." + std::to_string(i) + ".";
-        struct {
-            ggml_tensor ** dst;
-            const char *   name;
-            int64_t        ne0, ne1;
-        } ts[] = {
-            { &L.attn_q_w, "attn_q.weight", n_embd, n_embd }, { &L.attn_q_b, "attn_q.bias", n_embd, 1 },
-            { &L.attn_k_w, "attn_k.weight", n_embd, n_embd }, { &L.attn_k_b, "attn_k.bias", n_embd, 1 },
-            { &L.attn_v_w, "attn_v.weight", n_embd, n_embd }, { &L.attn_v_b, "attn_v.bias", n_embd, 1 },
-            { &L.attn_out_w, "attn_out.weight", n_embd, n_embd }, { &L.attn_out_b, "attn_out.bias", n_embd, 1 },
-            { &L.attn_norm_w, "attn_norm.weight", n_embd, 1 }, { &L.attn_norm_b, "attn_norm.bias", n_embd, 1 },
-            { &L.ffn_norm_w, "ffn_norm.weight", n_embd, 1 }, { &L.ffn_norm_b, "ffn_norm.bias", n_embd, 1 },
-            { &L.ffn_up_w, "ffn_up.weight", n_embd, head_ff }, { &L.ffn_up_b, "ffn_up.bias", head_ff, 1 },
-            { &L.ffn_down_w, "ffn_down.weight", head_ff, n_embd }, { &L.ffn_down_b, "ffn_down.bias", n_embd, 1 },
-        };
-        for (const auto & t : ts) {
-            if (!(*t.dst = get_tensor(model, p + t.name, t.ne0, t.ne1))) return false;
-        }
-    }
-    if (!(model->type_emb = get_tensor(model, "type_emb.weight", n_embd, 3))) return false;
-    if (!(model->scorer_norm_w = get_tensor(model, "scorer.norm.weight", n_embd))) return false;
-    if (!(model->scorer_norm_b = get_tensor(model, "scorer.norm.bias", n_embd))) return false;
-    if (!(model->scorer_fc_w = get_tensor(model, "scorer.fc.weight", n_embd, n_embd))) return false;
-    if (!(model->scorer_fc_b = get_tensor(model, "scorer.fc.bias", n_embd))) return false;
-    if (!(model->scorer_out_w = get_tensor(model, "scorer.out.weight", n_embd))) return false;
-    if (!(model->scorer_out_b = get_tensor(model, "scorer.out.bias", 1))) return false;
-
-    const int64_t act_hidden = ggml_get_tensor(model->ctx_w, "act.fc.weight") ?
-                                   ggml_get_tensor(model->ctx_w, "act.fc.weight")->ne[1] : 0;
-    if (!(model->act_fc_w = get_tensor(model, "act.fc.weight", n_embd + 4, act_hidden))) return false;
-    if (!(model->act_fc_b = get_tensor(model, "act.fc.bias", act_hidden))) return false;
-    if (!(model->act_out_w = get_tensor(model, "act.out.weight", act_hidden, model->n_act))) return false;
-    if (!(model->act_out_b = get_tensor(model, "act.out.bias", model->n_act))) return false;
-    if (model->type_emb->type != GGML_TYPE_F32) {
-        printf("[Error] type_emb.weight must be f32");
         return false;
     }
+    
+    if(!init_decision_head(model, ctx)){
+        printf("[Error] Failed to initialize Decision Head.");
+        return false;
+    }
+    
     return true;
 
 

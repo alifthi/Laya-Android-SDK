@@ -79,4 +79,7 @@ int64_t find_value(const gguf_context * ctx, const char * key);
 bool init_general_params(laya_model * model, const gguf_context * ctx);
 
 bool init_encoder(laya_model * model, const gguf_context * ctx);
+
+bool init_decision_head(laya_model * model, const gguf_context * ctx);
+
 #endif // LAYA_MODEL_H
