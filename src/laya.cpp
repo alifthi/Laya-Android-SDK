@@ -12,6 +12,8 @@ struct laya_context {
 
 };
 
+constexpr uint32_t FORMAT_VERSION = 2;
+
 extern "C" {
 
 /*
@@ -163,10 +165,10 @@ int load_params(laya_model * model, const char * path){
 
     const int64_t n_vocab = ggml_get_tensor(model->ctx_w, "token_embd.weight") ? ggml_get_tensor(model->ctx_w, "token_embd.weight")->ne[1] : 0;
 
-    model->token_embd = get_tensor(model, "token_embd.weight", n_embd, n_vocab);
+    model->tok_embd = get_tensor(model, "token_embd.weight", n_embd, n_vocab);
     model->tok_norm = get_tensor(model, "token_embd_norm.weight", n_embd);
     model->out_norm = get_tensor(model, "output_norm.weight", n_embd);
-    if(!model->token_embd || !model->tok_norm || !model->out_norm) return false;
+    if(!model->tok_embd || !model->tok_norm || !model->out_norm) return false;
 
     model->enc.resize(n_enc_layers);
     for(int32_t i = 0; i<n_enc_layers; ++i){
@@ -185,7 +187,7 @@ int load_params(laya_model * model, const char * path){
 
     //Decision Head
 
-    const int64_t head_ff = ggml_get_tensor(model->ctx, "head.0.ffn_up.weight")?
+    const int64_t head_ff = ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")?
                                 ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")->ne[1] : 4 * n_embd;;
 
     model->layers.resize(n_layers);
@@ -245,7 +247,7 @@ int load_weights(laya_model * model, const char * path) {
         return false;
     }
 
-    ggml_backend_buffer_set_uage(model->buf_w, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_buffer_set_usage(model->buf_w, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
     FILE * f = fopen(path, "rb");
     if(!f) {
@@ -278,7 +280,13 @@ laya_model * laya_model_load(const char * path) {
 
     laya_model * model = new laya_model();
     
-    if (!load_params(model, path) || !load_weights(model, path)) {
+    if(!load_params(model, path)){
+        printf("[Error] Failed to load parameters.");
+        laya_model_free(model);
+        return nullptr;
+    }
+    if (!load_weights(model, path)) {
+        printf("[Error] Failed to load weights.");
         laya_model_free(model);
         return nullptr;
     }
