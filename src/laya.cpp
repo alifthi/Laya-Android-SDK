@@ -65,43 +65,11 @@ int load_params(laya_model * model, const char * path){
         return 1;
     }
 
-    // Encoder Loader
-
-    const int64_t win_id = find_value("laya.encoder.attention_window");
-    const int64_t rope_id = find_value("laya.encoder.rope_theta");
-
-    if(win_id<0 || rope_id<0) return false;
-
-    if((int32_t) gguf_get_arr_n(ctx, win_id) != n_enc_layers || (int32_t) gguf_get_arr_n(ctx, rope_id) != n_enc_layers){
-        printf("[Error] laya.encoder.attention_window / rope_theta must have one entry per encoder layer");
-        return false;
+    if(!init_encoder(model, ctx)){
+        printf("[Error] Failed to initialize Encoder.");
+        return 1;
     }
-
-    const int32_t * windows = (const int32_t *) gguf_get_arr_data(ctx, win_id);
-    const float * thetas = (const float *) gguf_get_arr_data(ctx, rope_id);
-
-    const int64_t n_vocab = ggml_get_tensor(model->ctx_w, "token_embd.weight") ? ggml_get_tensor(model->ctx_w, "token_embd.weight")->ne[1] : 0;
-
-    model->tok_embd = get_tensor(model, "token_embd.weight", n_embd, n_vocab);
-    model->tok_norm = get_tensor(model, "token_embd_norm.weight", n_embd);
-    model->out_norm = get_tensor(model, "output_norm.weight", n_embd);
-    if(!model->tok_embd || !model->tok_norm || !model->out_norm) return false;
-
-    model->enc.resize(n_enc_layers);
-    for(int32_t i = 0; i<n_enc_layers; ++i){
-        enc_layer & L = model->enc[i];
-        const std::string p = "blk." + std::to_string(i) + ".";
-        L.window = windows[i];
-        L.rope_theta = thetas[i];
-        L.attn_norm  = get_tensor(model, p + "attn_norm.weight", n_embd, 1, /*required*/ i != 0);
-        if (i != 0 && !L.attn_norm) return false;
-        if (!(L.attn_qkv = get_tensor(model, p + "attn_qkv.weight", n_embd, 3 * n_embd))) return false;
-        if (!(L.attn_out = get_tensor(model, p + "attn_output.weight", n_embd, n_embd))) return false;
-        if (!(L.ffn_norm = get_tensor(model, p + "ffn_norm.weight", n_embd))) return false;
-        if (!(L.ffn_up = get_tensor(model, p + "ffn_up.weight", n_embd, 2 * n_ff))) return false;
-        if (!(L.ffn_down = get_tensor(model, p + "ffn_down.weight", n_ff, n_embd))) return false;     
-    }
-
+    
     //Decision Head
 
     const int64_t head_ff = ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")?
