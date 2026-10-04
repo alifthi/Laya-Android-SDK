@@ -1,10 +1,11 @@
 #include "laya.h"
 #include "llama.h"
+
 #include <vector>
 #include <cmath>
 #include <map>
 #include <string.h>
-
+#include <sort>
 
 constexpr uint32_t FORMAT_VERSION = 2;
 
@@ -14,6 +15,23 @@ int64_t find_value(const gguf_context * ctx, char * key){
         printf("[Error] failed to find key '%s' in the gguf context", key);
     }
     return id;  
+}
+
+static ggml_tensor * get_tensor(laya_model * model, const std::string & name, int64_t ne0, int64_t ne1 = 1, bool required = true){
+
+    ggml_tensor *t = ggml_get_tensor(model->ctx_w, name.c_str());
+    if(!t){
+        if(required)
+            printf("[Error] model file is missing tensor %s", name.c_str());
+        return nullptr;
+    }
+    if (t->ne[0] != ne0 || t->ne[1] != ne1 || t->ne[2] != 1 || t->ne[3] != 1) {
+        printf("tensor '%s' has shape [%lld, %lld], expected [%lld, %lld]", name.c_str(), (long long) t->ne[0],
+                  (long long) t->ne[1], (long long) ne0, (long long) ne1);
+        return nullptr;
+    }
+    return t;
+    
 }
 
 bool init_general_params(laya_model * model, const gguf_context * ctx){
@@ -103,10 +121,15 @@ bool init_general_params(laya_model * model, const gguf_context * ctx){
 
 bool init_encoder(laya_model * model, const gguf_context * ctx){
 
-    const int64_t win_id = find_value("laya.encoder.attention_window");
-    const int64_t rope_id = find_value("laya.encoder.rope_theta");
+    const int64_t win_id = find_value(ctx, "laya.encoder.attention_window");
+    const int64_t rope_id = find_value(ctx,"laya.encoder.rope_theta");
 
     if(win_id<0 || rope_id<0) return false;
+    int32_t n_enc_layers = 0;
+    
+    int32_t id = find_value(ctx, "laya.encoder.layer_count");
+    if(id<0) return false;
+    n_enc_layers = (int32_t) gguf_get_val_u32(ctx, id);
 
     if((int32_t) gguf_get_arr_n(ctx, win_id) != n_enc_layers || (int32_t) gguf_get_arr_n(ctx, rope_id) != n_enc_layers){
         printf("[Error] laya.encoder.attention_window / rope_theta must have one entry per encoder layer");
@@ -117,7 +140,7 @@ bool init_encoder(laya_model * model, const gguf_context * ctx){
     const float * thetas = (const float *) gguf_get_arr_data(ctx, rope_id);
 
     const int64_t n_vocab = ggml_get_tensor(model->ctx_w, "token_embd.weight") ? ggml_get_tensor(model->ctx_w, "token_embd.weight")->ne[1] : 0;
-
+    const int64_t n_embd = model->n_embd;
     model->tok_embd = get_tensor(model, "token_embd.weight", n_embd, n_vocab);
     model->tok_norm = get_tensor(model, "token_embd_norm.weight", n_embd);
     model->out_norm = get_tensor(model, "output_norm.weight", n_embd);
@@ -141,9 +164,14 @@ bool init_encoder(laya_model * model, const gguf_context * ctx){
 
 bool init_decision_head(laya_model * model, const gguf_context * ctx){
 
+    int32_t n_layers = 0;
+    const int64_t n_embd = model->n_embd;
+    int32_t id = find_value(ctx, "laya.head.layer_count");
+    if(id<0) return false;
+    n_layers = (int32_t) gguf_get_val_u32(ctx, id);
+    
     const int64_t head_ff = ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")?
                                 ggml_get_tensor(model->ctx_w, "head.0.ffn_up.weight")->ne[1] : 4 * n_embd;;
-
     model->layers.resize(n_layers);
     for(int32_t i = 0; i<n_layers; ++i){
         head_layer & L = model->layers[i];
@@ -184,4 +212,50 @@ bool init_decision_head(laya_model * model, const gguf_context * ctx){
         printf("[Error] type_emb.weight must be f32");
         return false;
     }
+}
+
+
+static bool load_tokenizer(laya_model * model, const char * path){
+
+    llama_model_params params = llama_model_default_params();
+    params.vocab_only = true;
+    params.n_gpu_layers = 0;
+    model->tok = llama_load_model_from_file(path, params);
+
+    if(!model->tok){
+        printf("[Error] Failed to load tokenizer.");
+        return false;
+    }
+
+    model->vocab = llama_model_get_vocab(model->tok);
+
+    const int32_t n_vocab = llama_vocab_n_tokens(model->vocab);
+
+    if (n_vocab > model->tok_embd->ne[1]) {
+        printf("[Error] tokenizer has %d tokens but the embedding only %lld rows", n_vocab, (long long) m->tok_embd->ne[1]);
+        return false;
+    }
+
+    model->added_by_byte.assign(256, {});
+    for (int32_t id = 0; id < n_vocab; ++id) {
+        const auto attr = llama_vocab_get_attr(model->vocab, id);
+        if (attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
+            const std::string t = llama_vocab_get_text(model->vocab, id);
+            if (!t.empty()) {
+                model->added_by_byte[(unsigned char) t[0]].emplace_back(t, id);
+            }
+        }
+    }
+
+    for (auto & b : model->added_by_byte) {
+        std::stable_sort(b.begin(), b.end(), [](const auto & a, const auto & c) { return a.first.size() > c.first.size(); });
+    }
+    for (int32_t t : { model->tok_cls, model->tok_sep, model->tok_mask, model->tok_pad }) {
+        if (t < 0 || t >= n_vocab) {
+            printf("[Error] special token id %d is outside the vocabulary", t);
+            return false;
+        }
+    }
+    return true;
+
 }

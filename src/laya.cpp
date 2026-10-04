@@ -31,26 +31,10 @@ struct laya_context_params laya_context_default_params(void) {
     return p;
 }
 
-static ggml_tensor * get_tensor(laya_model * model, const std::string & name, int64_t ne0, int64_t ne1 = 1, bool required = true){
-
-    ggml_tensor *t = ggml_get_tensor(model->ctx_w, name.c_str());
-    if(!t){
-        if(required)
-            printf("[Error] model file is missing tensor %s", name.c_str());
-        return nullptr;
-    }
-    if (t->ne[0] != ne0 || t->ne[1] != ne1 || t->ne[2] != 1 || t->ne[3] != 1) {
-        printf("tensor '%s' has shape [%lld, %lld], expected [%lld, %lld]", name.c_str(), (long long) t->ne[0],
-                  (long long) t->ne[1], (long long) ne0, (long long) ne1);
-        return nullptr;
-    }
-    return t;
-    
-}
 
 int load_params(laya_model * model, const char * path){
 
-    gguf_init_params params = {true, model->ctx_w};
+    gguf_init_params params = {true, &model->ctx_w};
     
     model->gguf = gguf_init_from_file(path, params);
     if(!model->gguf) {
@@ -76,9 +60,6 @@ int load_params(laya_model * model, const char * path){
     }
     
     return true;
-
-
-
 }
 
 int load_weights(laya_model * model, const char * path) {
@@ -130,12 +111,14 @@ laya_model * laya_model_load(const char * path) {
         laya_model_free(model);
         return nullptr;
     }
-    if (!load_weights(model, path)) {
+
+    if (!load_weights(model, path)){
         printf("[Error] Failed to load weights.");
         laya_model_free(model);
         return nullptr;
     }
 
+    
     return model;
 }
 

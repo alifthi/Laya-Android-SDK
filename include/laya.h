@@ -40,7 +40,7 @@ laya_context * laya_create_context(laya_model * model, struct laya_context_param
 
 int load_params(laya_model * model, const char * path);
 
-int load_weights(laya_model * model, const char * path) 
+int load_weights(laya_model * model, const char * path);
 
 laya_model * laya_model_load(const char * path);
 

@@ -82,4 +82,6 @@ bool init_encoder(laya_model * model, const gguf_context * ctx);
 
 bool init_decision_head(laya_model * model, const gguf_context * ctx);
 
+static bool load_tokenizer(laya_model * m, const char * path);
+
 #endif // LAYA_MODEL_H
