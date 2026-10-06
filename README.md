@@ -52,6 +52,41 @@ cmake --build build -j
 
 If you move the project directory, delete `build/` first. The CMake cache stores absolute paths.
 
+### Android
+
+Cross-compile with the Android NDK (r26 or newer). Point `NDK` at your installation, for example
+`~/Android/Sdk/ndk/<version>`.
+
+```sh
+NDK=~/Android/Sdk/ndk/<version>
+cmake -B build-android \
+  -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DLAYA_BUILD_TESTS=OFF \
+  -DGGML_OPENMP=OFF
+cmake --build build-android -j --target laya-cli
+```
+
+- `BUILD_SHARED_LIBS=OFF` produces a single static `laya-cli`, so no `.so` files need to be copied alongside it.
+- `GGML_OPENMP=OFF` avoids shipping `libomp.so`; ggml uses its own thread pool instead.
+- Use `ANDROID_ABI=x86_64` for the emulator.
+- On ARMv8.2+ devices, `-DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod` speeds up quantized matmuls.
+
+Copy the binary and the model to the device and run them:
+
+```sh
+adb push build-android/laya-cli /data/local/tmp/
+adb push models/gguf/laya.gguf /data/local/tmp/
+adb shell 'cd /data/local/tmp && chmod +x laya-cli && ./laya-cli -m laya.gguf -f request.json'
+```
+
+To use liblaya from an Android app instead, build it with `-DBUILD_SHARED_LIBS=ON -DLAYA_BUILD_CLI=OFF`, or add
+this `CMakeLists.txt` to the app's Gradle `externalNativeBuild { cmake { ... } }` block. Then call the C API in
+`laya.h` through a JNI wrapper.
+
 
 ## Using the CLI
 
