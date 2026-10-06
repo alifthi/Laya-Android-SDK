@@ -10,7 +10,7 @@
 
 constexpr uint32_t FORMAT_VERSION = 2;
 
-int64_t find_value(const gguf_context * ctx, char * key){
+int64_t find_value(const gguf_context * ctx, const char * key){
     const int64_t id = gguf_find_key(ctx, key);
     if(id<0){
         printf("[Error] failed to find key '%s' in the gguf context", key);
@@ -109,7 +109,7 @@ bool init_general_params(laya_model * model, const gguf_context * ctx){
     if(id<0) return false;
 
     const int32_t n_temp = (int32_t) gguf_get_val_u32(ctx, id);
-    const int64_t temp_keys = find_value(ctx, "laya.temperature_by_options.key");
+    const int64_t temp_keys = find_value(ctx, "laya.temperature_by_options.keys");
     const int64_t temp_vals = find_value(ctx, "laya.temperature_by_options.values");
     if(temp_keys<0 || temp_vals<0) return false;
 
@@ -128,7 +128,7 @@ bool init_encoder(laya_model * model, const gguf_context * ctx){
     if(win_id<0 || rope_id<0) return false;
     int32_t n_enc_layers = 0, n_ff = 0;
     
-    int32_t id = find_value(ctx, "laya.encoder.layer_count");
+    int64_t id = find_value(ctx, "laya.encoder.layer_count");
     if(id<0) return false;
     n_enc_layers = (int32_t) gguf_get_val_u32(ctx, id);
 
@@ -146,14 +146,21 @@ bool init_encoder(laya_model * model, const gguf_context * ctx){
     const float * thetas = (const float *) gguf_get_arr_data(ctx, rope_id);
 
     const int64_t n_vocab = ggml_get_tensor(model->ctx_w, "token_embd.weight") ? ggml_get_tensor(model->ctx_w, "token_embd.weight")->ne[1] : 0;
+    
     const int64_t n_embd = model->n_embd;
+    if (n_embd <= 0 || model->n_enc_head <= 0 || n_embd % model->n_enc_head != 0 || model->n_head <= 0 || n_embd % model->n_head != 0) {
+        printf("invalid embedding / head sizes in model file");
+        return false;
+    }
+
     model->tok_embd = get_tensor(model, "token_embd.weight", n_embd, n_vocab);
     model->tok_norm = get_tensor(model, "token_embd_norm.weight", n_embd);
     model->out_norm = get_tensor(model, "output_norm.weight", n_embd);
     if(!model->tok_embd || !model->tok_norm || !model->out_norm) return false;
 
     model->enc.resize(n_enc_layers);
-    for(int32_t i = 0; i<n_enc_layers; ++i){
+    
+    for(int32_t i = 0; i<n_enc_layers; i++){
         enc_layer & L = model->enc[i];
         const std::string p = "blk." + std::to_string(i) + ".";
         L.window = windows[i];
@@ -164,8 +171,9 @@ bool init_encoder(laya_model * model, const gguf_context * ctx){
         if (!(L.attn_out = get_tensor(model, p + "attn_output.weight", n_embd, n_embd))) return false;
         if (!(L.ffn_norm = get_tensor(model, p + "ffn_norm.weight", n_embd))) return false;
         if (!(L.ffn_up = get_tensor(model, p + "ffn_up.weight", n_embd, 2 * n_ff))) return false;
-        if (!(L.ffn_down = get_tensor(model, p + "ffn_down.weight", n_ff, n_embd))) return false;     
+        if (!(L.ffn_down = get_tensor(model, p + "ffn_down.weight", n_ff, n_embd))) return false;
     }
+    return true;
 }
 
 bool init_decision_head(laya_model * model, const gguf_context * ctx){
@@ -218,6 +226,7 @@ bool init_decision_head(laya_model * model, const gguf_context * ctx){
         printf("[Error] type_emb.weight must be f32");
         return false;
     }
+    return true;
 }
 
 // y = W x + b; W is [n_in, n_out] in ggml order, x is [n_in, n]

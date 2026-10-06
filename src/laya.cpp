@@ -165,7 +165,7 @@ laya_context * laya_create_context(laya_model * model, struct laya_context_param
     laya_context * ctx = new laya_context();
     ctx->model = model;
     ctx->cpu = ggml_backend_cpu_init();
-    if(ctx->cpu){
+    if(!ctx->cpu){
         printf("[Error] failed to initialize the CPU backend.");
         delete ctx;
         return nullptr;
@@ -173,6 +173,10 @@ laya_context * laya_create_context(laya_model * model, struct laya_context_param
     ggml_backend_cpu_set_n_threads(ctx->cpu, n_threads);
     ctx->galloc = ggml_gallocr_new(ggml_backend_cpu_buffer_type());
     return ctx;
+}
+
+laya_context * laya_context_new(laya_model * model, struct laya_context_params params) {
+    return laya_create_context(model, params);
 }
 
 void laya_context_free(laya_context * ctx){
