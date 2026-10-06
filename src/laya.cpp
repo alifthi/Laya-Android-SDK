@@ -5,6 +5,9 @@
 #include "gguf.h"
 #include "ggml-backend.h"
 #include <string.h>
+#include <cmath>
+#include <thread>
+
 struct laya_context {
     laya_model *         model  = nullptr;
     ggml_backend_t       cpu    = nullptr;
@@ -146,4 +149,23 @@ void laya_model_free(laya_model * model){
     delete model;
 }
 
+laya_context * laya_create_context(laya_model * model, struct laya_context_params params){
+
+    int n_threads = params.n_threads;
+    if(n_threads < 0){
+        n_threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+    }
+
+    laya_context * ctx = new laya_context();
+    ctx->model = model;
+    ctx->cpu = ggml_backend_cpu_init();
+    if(ctx->cpu){
+        printf("[Error] failed to initialize the CPU backend.");
+        delete ctx;
+        return nullptr;
+    }
+    ggml_backend_cpu_set_n_threads(ctx->cpu, n_threads);
+    ctx->galloc = ggml_gallocr_new(ggml_backend_cpu_buffer_type());
+    return ctx;
+}
 } // extern "C"
