@@ -168,4 +168,11 @@ laya_context * laya_create_context(laya_model * model, struct laya_context_param
     ctx->galloc = ggml_gallocr_new(ggml_backend_cpu_buffer_type());
     return ctx;
 }
+
+void laya_context_free(laya_context * ctx){
+    if(!ctx) return;
+    if(ctx->galloc) ggml_gallocr_free(ctx->galloc);
+    if(ctx->cpu) ggml_backend_free(ctx->cpu);
+    delete ctx;
+}
 } // extern "C"
