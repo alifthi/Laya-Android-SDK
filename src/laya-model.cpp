@@ -1,6 +1,7 @@
 #include "laya.h"
 #include "laya-model.h"
 #include "llama.h"
+#include "tokenizer.h"
 
 #include <vector>
 #include <cmath>
@@ -219,3 +220,148 @@ bool init_decision_head(laya_model * model, const gguf_context * ctx){
     }
 }
 
+// y = W x + b; W is [n_in, n_out] in ggml order, x is [n_in, n]
+static ggml_tensor * linear(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) {
+    x = ggml_mul_mat(ctx, w, x);
+    return b ? ggml_add(ctx, x, b) : x;
+}
+
+static ggml_tensor * layer_norm(ggml_context * ctx, ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, float eps) {
+    x = ggml_norm(ctx, x, eps);
+    if (w) {
+        x = ggml_mul(ctx, x, w);
+    }
+    return b ? ggml_add(ctx, x, b) : x;
+}
+
+// q: [hd, nh, Lq], k/v: [hd, nh, Lk], mask: [Lk, Lq] additive or null -> [d, Lq]
+static ggml_tensor * attention(ggml_context * ctx, ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
+                               ggml_tensor * mask, int64_t d) {
+    const int64_t hd = q->ne[0], Lq = q->ne[2];
+    q = ggml_permute(ctx, q, 0, 2, 1, 3);                       // [hd, Lq, nh]
+    k = ggml_permute(ctx, k, 0, 2, 1, 3);                       // [hd, Lk, nh]
+    v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3));       // [Lk, hd, nh]
+    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);                 // [Lk, Lq, nh]
+    kq = ggml_soft_max_ext(ctx, kq, mask, 1.0f / sqrtf((float) hd), 0.0f);
+    ggml_tensor * o = ggml_mul_mat(ctx, v, kq);                 // [hd, Lq, nh]
+    o = ggml_cont(ctx, ggml_permute(ctx, o, 0, 2, 1, 3));       // [hd, nh, Lq]
+    return ggml_reshape_2d(ctx, o, d, Lq);
+}
+
+ggml_cgraph * build_graph(laya_context * lc, int32_t L, int32_t k, int qtype, float T, graph_io & io) {
+    const laya_model * m = lc->model;
+    const int64_t      d = m->n_embd;
+
+    const size_t buf_size = ggml_tensor_overhead() * GRAPH_SIZE + ggml_graph_overhead_custom(GRAPH_SIZE, false);
+    lc->graph_buf.resize(buf_size);
+    ggml_init_params ip = { buf_size, lc->graph_buf.data(), /*no_alloc*/ true };
+    ggml_context *   ctx = ggml_init(ip);
+    ggml_cgraph *    gf  = ggml_new_graph_custom(ctx, GRAPH_SIZE, false);
+
+    auto input = [&](ggml_tensor * t, const char * name) {
+        ggml_set_name(t, name);
+        ggml_set_input(t);
+        return t;
+    };
+    io.ids   = input(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, L), "inp_ids");
+    io.pos   = input(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, L), "inp_pos");
+    io.rows  = input(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 1 + k), "inp_rows");
+    io.act_k = input(ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1), "inp_act_k");
+    io.masks.clear();
+    for (const enc_layer & ly : m->enc) {
+        if (ly.window > 0 && ly.window < L - 1 && !io.masks.count(ly.window)) {
+            io.masks[ly.window] = input(ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, L), "inp_swa_mask");
+        }
+    }
+
+    // ---- encoder (ModernBERT): pre-norm, fused QKV + NeoX RoPE, GeGLU (exact erf) FFN
+    const int64_t nh = m->n_enc_head, hd = d / nh;
+    ggml_tensor * x  = ggml_get_rows(ctx, m->tok_embd, io.ids); // [d, L]
+    x                = layer_norm(ctx, x, m->tok_norm, nullptr, m->enc_eps);
+    for (const enc_layer & ly : m->enc) {
+        ggml_tensor * h   = ly.attn_norm ? layer_norm(ctx, x, ly.attn_norm, nullptr, m->enc_eps) : x;
+        ggml_tensor * qkv = ggml_mul_mat(ctx, ly.attn_qkv, h); // [3d, L]
+        const size_t  es  = ggml_element_size(qkv);
+        ggml_tensor * q   = ggml_view_3d(ctx, qkv, hd, nh, L, hd * es, qkv->nb[1], 0);
+        ggml_tensor * kk  = ggml_view_3d(ctx, qkv, hd, nh, L, hd * es, qkv->nb[1], d * es);
+        ggml_tensor * v   = ggml_view_3d(ctx, qkv, hd, nh, L, hd * es, qkv->nb[1], 2 * d * es);
+        q  = ggml_rope_ext(ctx, q, io.pos, nullptr, (int) hd, GGML_ROPE_TYPE_NEOX, 0, ly.rope_theta, 1.0f, 0.0f, 1.0f,
+                           0.0f, 0.0f);
+        kk = ggml_rope_ext(ctx, kk, io.pos, nullptr, (int) hd, GGML_ROPE_TYPE_NEOX, 0, ly.rope_theta, 1.0f, 0.0f, 1.0f,
+                           0.0f, 0.0f);
+        const auto    mi   = io.masks.find(ly.window);
+        ggml_tensor * mask = mi != io.masks.end() ? mi->second : nullptr;
+        x = ggml_add(ctx, x, ggml_mul_mat(ctx, ly.attn_out, attention(ctx, q, kk, v, mask, d)));
+
+        ggml_tensor * f = layer_norm(ctx, x, ly.ffn_norm, nullptr, m->enc_eps);
+        f               = ggml_geglu_erf(ctx, ggml_mul_mat(ctx, ly.ffn_up, f));
+        x               = ggml_add(ctx, x, ggml_mul_mat(ctx, ly.ffn_down, f));
+    }
+    x = layer_norm(ctx, x, m->out_norm, nullptr, m->enc_eps);
+    x = ggml_add(ctx, x, ggml_view_1d(ctx, m->type_emb, d, (size_t) qtype * m->type_emb->nb[1]));
+
+    // ---- decision head: nn.TransformerEncoderLayer(norm_first=True, relu). The last layer only computes queries
+    // and the FFN for the rows that are read ([CLS] + option markers); attention still sees every position.
+    const int64_t hnh = m->n_head, hhd = d / hnh;
+    const int     n_layers = (int) m->layers.size();
+    for (int il = 0; il < n_layers; ++il) {
+        const head_layer & ly   = m->layers[il];
+        const bool         last = il == n_layers - 1;
+
+        ggml_tensor * xn = layer_norm(ctx, x, ly.attn_norm_w, ly.attn_norm_b, m->norm_eps);
+        ggml_tensor * K  = linear(ctx, xn, ly.attn_k_w, ly.attn_k_b);
+        ggml_tensor * V  = linear(ctx, xn, ly.attn_v_w, ly.attn_v_b);
+        ggml_tensor * xq = last ? ggml_get_rows(ctx, xn, io.rows) : xn;
+        ggml_tensor * xr = last ? ggml_get_rows(ctx, x, io.rows) : x;
+        ggml_tensor * Q  = linear(ctx, xq, ly.attn_q_w, ly.attn_q_b);
+        const int64_t M  = Q->ne[1];
+
+        ggml_tensor * a = attention(ctx, ggml_reshape_3d(ctx, Q, hhd, hnh, M), ggml_reshape_3d(ctx, K, hhd, hnh, L),
+                                    ggml_reshape_3d(ctx, V, hhd, hnh, L), nullptr, d);
+        x = ggml_add(ctx, xr, linear(ctx, a, ly.attn_out_w, ly.attn_out_b));
+
+        ggml_tensor * f = layer_norm(ctx, x, ly.ffn_norm_w, ly.ffn_norm_b, m->norm_eps);
+        f               = ggml_relu(ctx, linear(ctx, f, ly.ffn_up_w, ly.ffn_up_b));
+        x               = ggml_add(ctx, x, linear(ctx, f, ly.ffn_down_w, ly.ffn_down_b));
+    }
+    if (n_layers == 0) {
+        x = ggml_get_rows(ctx, x, io.rows);
+    }
+    // x: [d, 1 + k]; row 0 = [CLS], rows 1.. = option markers
+
+    // ---- scorer: LayerNorm -> Linear -> GELU -> Linear
+    ggml_tensor * s = layer_norm(ctx, x, m->scorer_norm_w, m->scorer_norm_b, m->norm_eps);
+    s               = ggml_gelu_erf(ctx, linear(ctx, s, m->scorer_fc_w, m->scorer_fc_b));
+    s               = linear(ctx, s, m->scorer_out_w, m->scorer_out_b); // [1, 1 + k]
+    io.logits       = s;
+    ggml_set_name(s, "logits");
+    ggml_set_output(s);
+
+    ggml_tensor * lg = ggml_cont(ctx, ggml_view_1d(ctx, s, k, s->nb[1])); // option logits [k]
+    io.probs         = ggml_soft_max_ext(ctx, lg, nullptr, 1.0f / T, 0.0f);
+    ggml_set_name(io.probs, "probs");
+    ggml_set_output(io.probs);
+
+    // ---- act head: [pooled [CLS], top1, top1 - top2, normalized entropy, k / 255] of the uncalibrated answer
+    ggml_tensor * p      = ggml_soft_max(ctx, lg);
+    ggml_tensor * sorted = ggml_get_rows(ctx, ggml_reshape_2d(ctx, p, 1, k), ggml_argsort(ctx, p, GGML_SORT_ORDER_DESC));
+    sorted               = ggml_reshape_1d(ctx, sorted, k);
+    ggml_tensor * top1   = ggml_view_1d(ctx, sorted, 1, 0);
+    ggml_tensor * margin = k > 1 ? ggml_sub(ctx, top1, ggml_view_1d(ctx, sorted, 1, sorted->nb[0])) : top1;
+    ggml_tensor * ent    = ggml_sum(ctx, ggml_mul(ctx, p, ggml_log(ctx, ggml_clamp(ctx, p, 1e-9f, INFINITY))));
+    ent                  = ggml_scale(ctx, ent, -1.0f / logf((float) std::max(k, 2)));
+    ggml_tensor * feats  = ggml_concat(ctx, ggml_concat(ctx, ggml_cont(ctx, top1), ggml_cont(ctx, margin), 0),
+                                       ggml_concat(ctx, ent, io.act_k, 0), 0);
+    ggml_tensor * pooled = ggml_view_1d(ctx, x, d, 0);
+    ggml_tensor * a      = ggml_concat(ctx, ggml_cont(ctx, pooled), feats, 0); // [d + 4]
+    a                    = ggml_gelu_erf(ctx, linear(ctx, a, m->act_fc_w, m->act_fc_b));
+    io.act               = ggml_soft_max(ctx, linear(ctx, a, m->act_out_w, m->act_out_b));
+    ggml_set_name(io.act, "act");
+    ggml_set_output(io.act);
+
+    ggml_build_forward_expand(gf, io.logits);
+    ggml_build_forward_expand(gf, io.probs);
+    ggml_build_forward_expand(gf, io.act);
+    ggml_free(ctx);
+    return gf;
+}

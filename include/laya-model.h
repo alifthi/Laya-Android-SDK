@@ -20,6 +20,23 @@ struct enc_layer {
     float         rope_theta = 10000.0f;
 };
 
+struct laya_context {
+    laya_model *         model  = nullptr;
+    ggml_backend_t       cpu    = nullptr;
+    ggml_gallocr_t       galloc = nullptr;
+    std::vector<uint8_t> graph_buf;
+    std::vector<float>   mask;
+
+};
+struct graph_io {
+    ggml_tensor * ids, * pos, * rows, * act_k;
+    std::map<int32_t, ggml_tensor *> masks; // window -> [L, L]
+    ggml_tensor * logits;                   // [1, 1 + k]: [CLS] row, then one per option (uncalibrated)
+    ggml_tensor * probs;                    // [k] calibrated
+    ggml_tensor * act;                      // [n_act] act head distribution
+};
+
+static constexpr int GRAPH_SIZE = 8192;
 struct head_layer {
     ggml_tensor * attn_q_w, * attn_q_b;
     ggml_tensor * attn_k_w, * attn_k_b;
@@ -85,5 +102,6 @@ bool init_encoder(laya_model * model, const gguf_context * ctx);
 
 bool init_decision_head(laya_model * model, const gguf_context * ctx);
 
+ggml_cgraph * build_graph(laya_context * lc, int32_t L, int32_t k, int qtype, float T, graph_io & io)
 
 #endif // LAYA_MODEL_H
