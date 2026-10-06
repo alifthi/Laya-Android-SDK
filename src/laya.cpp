@@ -21,6 +21,11 @@ struct laya_context {
 
 extern "C" {
 
+const char * laya_model_name(const laya_model * m) { return m->name.c_str(); }
+int32_t laya_model_max_len(const laya_model * m) { return m->max_len; }
+int32_t laya_model_head_max_len(const laya_model * m) { return m->head_max_len; }
+int32_t laya_model_n_embd(const laya_model * m) { return m->n_embd; }
+
 /*
     * To silent ggml logs, except warnings and errors
 */
@@ -178,4 +183,5 @@ void laya_context_free(laya_context * ctx){
     if(ctx->cpu) ggml_backend_free(ctx->cpu);
     delete ctx;
 }
+
 } // extern "C"
