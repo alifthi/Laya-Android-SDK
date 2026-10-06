@@ -124,11 +124,16 @@ bool init_encoder(laya_model * model, const gguf_context * ctx){
     const int64_t rope_id = find_value(ctx,"laya.encoder.rope_theta");
 
     if(win_id<0 || rope_id<0) return false;
-    int32_t n_enc_layers = 0;
+    int32_t n_enc_layers = 0, n_ff = 0;
     
     int32_t id = find_value(ctx, "laya.encoder.layer_count");
     if(id<0) return false;
     n_enc_layers = (int32_t) gguf_get_val_u32(ctx, id);
+
+    id = find_value(ctx, "laya.encoder.feed_forward_length");
+    if(id<0) return false;
+    n_ff = (int32_t) gguf_get_val_u32(ctx, id);
+    
 
     if((int32_t) gguf_get_arr_n(ctx, win_id) != n_enc_layers || (int32_t) gguf_get_arr_n(ctx, rope_id) != n_enc_layers){
         printf("[Error] laya.encoder.attention_window / rope_theta must have one entry per encoder layer");

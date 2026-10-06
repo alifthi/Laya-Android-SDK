@@ -1,5 +1,5 @@
-#include "tokenizer.h"
 #include <sort>
+#include "tokenizer.h"
 
 
 static bool load_tokenizer(laya_model * model, const char * path){
