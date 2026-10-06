@@ -102,6 +102,6 @@ bool init_encoder(laya_model * model, const gguf_context * ctx);
 
 bool init_decision_head(laya_model * model, const gguf_context * ctx);
 
-ggml_cgraph * build_graph(laya_context * lc, int32_t L, int32_t k, int qtype, float T, graph_io & io)
+ggml_cgraph * build_graph(laya_context * lc, int32_t L, int32_t k, int qtype, float T, graph_io & io);
 
 #endif // LAYA_MODEL_H

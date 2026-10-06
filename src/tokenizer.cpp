@@ -1,5 +1,6 @@
 #include "tokenizer.h"
 #include "laya-model.h"
+#include "nfc.h"
 
 #include <algorithm>
 
@@ -107,7 +108,7 @@ static bool tokenize_segment(const laya_model * m, const std::string & seg, std:
 }
 
 // Equivalent of `tok(text, add_special_tokens=False)["input_ids"]`
-static bool tokenize_text(const laya_model * m, const std::string & text, std::vector<int32_t> & out) {
+bool tokenize_text(const laya_model * m, const std::string & text, std::vector<int32_t> & out) {
     out.clear();
     size_t seg_start = 0, i = 0;
     while (i < text.size()) {

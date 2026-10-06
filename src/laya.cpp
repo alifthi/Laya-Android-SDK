@@ -12,13 +12,10 @@
 #include <cmath>
 #include <thread>
 
-struct laya_context {
-    laya_model *         model  = nullptr;
-    ggml_backend_t       cpu    = nullptr;
-    ggml_gallocr_t       galloc = nullptr;
 
-};
 
+
+const char * const QTYPE_NAMES[] = { "choice", "score", "noul" };
 
 extern "C" {
 
@@ -254,7 +251,6 @@ static bool build_sequence(const laya_model * m, const char * state, const laya_
     const std::string   ins = replace_all(q->instructions ? q->instructions : "", mt, " ");
 
     std::vector<int32_t> head_ids;
-    const char * const QTYPE_NAMES[] = { "choice", "score", "noul" };
     if (!tokenize_text(m, std::string(QTYPE_NAMES[q->type]) + " question: " + ins, head_ids)) {
         return false;
     }
@@ -337,4 +333,96 @@ int32_t laya_build_sequence(const laya_model * model, const char * state, const 
     }
     return (int32_t) ids.size();
 }
+
+static std::string temp_bucket(int qtype, int k) {
+    const char * size = k <= 2 ? "2" : k <= 5 ? "3-5" : k <= 10 ? "6-10" : "11+";
+    return std::string(QTYPE_NAMES[qtype]) + ":" + size;
+}
+
+int32_t laya_run_inference(laya_context * lc, const char * state, const struct laya_question * q, float * probs,
+                    float * logits_out, struct laya_answer * answer) {
+    if (!lc || !q || !probs || !answer) {
+        printf("[Error] laya_run_inference: null argument");
+        return -1;
+    }
+    const laya_model * m = lc->model;
+
+    std::vector<int32_t> ids, markers;
+    if (!build_sequence(m, state, q, ids, markers)) {
+        return -2;
+    }
+    const int32_t L = (int32_t) ids.size();
+    const int32_t k = (int32_t) markers.size();
+
+    const auto  it = m->temperature_by_options.find(temp_bucket(q->type, k));
+    const float T  = it != m->temperature_by_options.end() ? it->second : m->temperature[q->type];
+
+    graph_io io;
+    ggml_cgraph * gf = build_graph(lc, L, k, (int) q->type, T, io);
+    if (!ggml_gallocr_alloc_graph(lc->galloc, gf)) {
+        printf("[Error] failed to allocate the compute graph");
+        return -3;
+    }
+
+    std::vector<int32_t> pos(L), rows;
+    for (int32_t i = 0; i < L; ++i) pos[i] = i;
+    rows.push_back(0);
+    rows.insert(rows.end(), markers.begin(), markers.end());
+    const float act_k = (float) std::max(k, 2) / 255.0f;
+    ggml_backend_tensor_set(io.ids, ids.data(), 0, ggml_nbytes(io.ids));
+    ggml_backend_tensor_set(io.pos, pos.data(), 0, ggml_nbytes(io.pos));
+    ggml_backend_tensor_set(io.rows, rows.data(), 0, ggml_nbytes(io.rows));
+    ggml_backend_tensor_set(io.act_k, &act_k, 0, sizeof(act_k));
+    for (const auto & [w, t] : io.masks) {
+        lc->mask.resize((size_t) L * L);
+        for (int32_t i = 0; i < L; ++i) {
+            for (int32_t j = 0; j < L; ++j) {
+                lc->mask[(size_t) i * L + j] = std::abs(i - j) <= w ? 0.0f : -INFINITY;
+            }
+        }
+        ggml_backend_tensor_set(t, lc->mask.data(), 0, ggml_nbytes(t));
+    }
+
+    if (ggml_backend_graph_compute(lc->cpu, gf) != GGML_STATUS_SUCCESS) {
+        printf("[Error] graph compute failed");
+        return -4;
+    }
+    std::vector<float> all_logits(1 + k), p(k), act(m->n_act);
+    ggml_backend_tensor_get(io.logits, all_logits.data(), 0, ggml_nbytes(io.logits));
+    ggml_backend_tensor_get(io.probs, p.data(), 0, ggml_nbytes(io.probs));
+    ggml_backend_tensor_get(io.act, act.data(), 0, ggml_nbytes(io.act));
+
+    int32_t best = 0;
+    for (int32_t i = 1; i < k; ++i) {
+        if (p[i] > p[best]) best = i;
+    }
+    double conf = 1.0;
+    if (k >= 2) {
+        double ent = 0.0;
+        for (float v : p) ent -= v * log(std::min(1.0, std::max((double) v, 1e-12)));
+        conf = 1.0 - ent / log((double) k);
+    }
+
+    for (int32_t i = 0; i < k; ++i) {
+        probs[i] = p[i];
+        if (logits_out) logits_out[i] = all_logits[1 + i];
+    }
+    answer->n_options       = k;
+    answer->best            = best;
+    answer->confidence      = (float) conf;
+    answer->act_probability = act[0];
+    answer->temperature     = T;
+    answer->n_tokens        = L;
+    if (q->type == LAYA_QTYPE_SCORE) {
+        double ev = 0.0;
+        for (int32_t i = 0; i < k; ++i) ev += i * (double) p[i];
+        answer->value = (float) ev;
+    } else if (q->type == LAYA_QTYPE_NOUL) {
+        answer->value = p[1];
+    } else {
+        answer->value = p[best];
+    }
+    return 0;
+}
+
 } // extern "C"
