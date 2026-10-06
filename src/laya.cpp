@@ -8,6 +8,7 @@
 #include "tokenizer.h"
 
 #include <string.h>
+#include <algorithm>
 #include <cmath>
 #include <thread>
 
@@ -184,4 +185,156 @@ void laya_context_free(laya_context * ctx){
     delete ctx;
 }
 
+std::string replace_all(std::string s, const std::string & from, const std::string & to) {
+    if (from.empty()) {
+        return s;
+    }
+    size_t pos = 0;
+    while ((pos = s.find(from, pos)) != std::string::npos) {
+        s.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+    return s;
+}
+
+static bool render_options(const laya_question * q, std::vector<std::string> & opts) {
+    opts.clear();
+    auto desc = [&](int i) -> const char * {
+        return q->descriptions ? q->descriptions[i] : nullptr;
+    };
+    switch (q->type) {
+        case LAYA_QTYPE_CHOICE:
+            if (q->n_options < 1 || !q->keys) {
+                printf("[Error] choice question needs at least one option key");
+                return false;
+            }
+            for (int i = 0; i < q->n_options; ++i) {
+                if (!q->keys[i]) {
+                    printf("[Error] choice option %d has no key", i);
+                    return false;
+                }
+                const char * d = desc(i);
+                opts.push_back(d && *d ? std::string(q->keys[i]) + ": " + d : std::string(q->keys[i]));
+            }
+            return true;
+        case LAYA_QTYPE_SCORE:
+            if (q->n_options < 1 || !q->descriptions) {
+                printf("[Error] score question needs at least one level description");
+                return false;
+            }
+            for (int i = 0; i < q->n_options; ++i) {
+                const char * d = desc(i);
+                opts.push_back("level " + std::to_string(i) + ": " + (d ? d : "None"));
+            }
+            return true;
+        case LAYA_QTYPE_NOUL: {
+            if (q->n_options != 0 && q->n_options != 2) {
+                printf("[Error] noul question takes 0 or 2 descriptions (false, true), got %d", q->n_options);
+                return false;
+            }
+            const char * f = q->n_options == 2 ? desc(0) : nullptr;
+            const char * t = q->n_options == 2 ? desc(1) : nullptr;
+            opts.push_back(std::string("false: ") + (f && *f ? f : "no, the statement does not hold"));
+            opts.push_back(std::string("true: ") + (t && *t ? t : "yes, the statement holds"));
+            return true;
+        }
+    }
+    printf("[Error] unknown question type %d", (int) q->type);
+    return false;
+}
+
+// [CLS] <type> question: instructions [SEP] [MASK] opt0 [MASK] opt1 ... [SEP] state [SEP]  (build_sequence)
+static bool build_sequence(const laya_model * m, const char * state, const laya_question * q,
+                           std::vector<int32_t> & ids, std::vector<int32_t> & markers) {
+    std::vector<std::string> opts;
+    if (!render_options(q, opts)) {
+        return false;
+    }
+    const std::string & mt = m->mask_text;
+    const std::string   ins = replace_all(q->instructions ? q->instructions : "", mt, " ");
+
+    std::vector<int32_t> head_ids;
+    const char * const QTYPE_NAMES[] = { "choice", "score", "noul" };
+    if (!tokenize_text(m, std::string(QTYPE_NAMES[q->type]) + " question: " + ins, head_ids)) {
+        return false;
+    }
+
+    std::vector<std::vector<int32_t>> opt_ids;
+    std::vector<int32_t>              tmp;
+    size_t                            total = 0;
+    for (const auto & o : opts) {
+        if (!tokenize_text(m, " " + replace_all(o, mt, " "), tmp)) {
+            return false;
+        }
+        std::vector<int32_t> v{ m->tok_mask };
+        v.insert(v.end(), tmp.begin(), tmp.begin() + std::min<size_t>(tmp.size(), 48));
+        total += v.size();
+        opt_ids.push_back(std::move(v));
+    }
+    int64_t opt_budget = (int64_t) m->head_max_len - (int64_t) total;
+    if (opt_budget < 16) { // too many / too long options: shrink every option text evenly
+        const int64_t per = std::max<int64_t>(4, (m->head_max_len - 16) / std::max<int64_t>(1, opt_ids.size()));
+        total = 0;
+        for (auto & o : opt_ids) {
+            if ((int64_t) o.size() > per) {
+                o.resize(per);
+            }
+            total += o.size();
+        }
+        opt_budget = (int64_t) m->head_max_len - (int64_t) total;
+    }
+    const int64_t head_keep = std::max<int64_t>(8, opt_budget);
+    if ((int64_t) head_ids.size() > head_keep) {
+        head_ids.resize(head_keep);
+    }
+
+    ids.clear();
+    markers.clear();
+    ids.push_back(m->tok_cls);
+    ids.insert(ids.end(), head_ids.begin(), head_ids.end());
+    ids.push_back(m->tok_sep);
+    for (const auto & o : opt_ids) {
+        markers.push_back((int32_t) ids.size());
+        ids.insert(ids.end(), o.begin(), o.end());
+    }
+    ids.push_back(m->tok_sep);
+
+    const int64_t room = std::max<int64_t>(0, (int64_t) m->max_len - (int64_t) ids.size() - 1);
+    std::vector<int32_t> st;
+    if (!tokenize_text(m, replace_all(state ? state : "", mt, " "), st)) {
+        return false;
+    }
+    if ((int64_t) st.size() > room) {
+            st.resize(room);
+    }
+    ids.insert(ids.end(), st.begin(), st.end());
+    ids.push_back(m->tok_sep);
+    if ((int64_t) ids.size() > m->max_len) {
+        ids.resize(m->max_len);
+    }
+    markers.erase(std::remove_if(markers.begin(), markers.end(), [&](int32_t p) { return p >= m->max_len; }),
+                  markers.end());
+    if (markers.size() != opts.size()) {
+        printf("[Error] options do not fit in head_max_len=%d tokens", m->head_max_len);
+        return false;
+    }
+    return true;
+}
+
+
+int32_t laya_build_sequence(const laya_model * model, const char * state, const struct laya_question * q,
+                            int32_t * tokens, int32_t n_max, int32_t * markers) {
+    std::vector<int32_t> ids, mk;
+    if (!build_sequence(model, state, q, ids, mk)) {
+        return INT32_MIN;
+    }
+    if ((int32_t) ids.size() > n_max) {
+        return -(int32_t) ids.size();
+    }
+    std::copy(ids.begin(), ids.end(), tokens);
+    if (markers) {
+        std::copy(mk.begin(), mk.end(), markers);
+    }
+    return (int32_t) ids.size();
+}
 } // extern "C"

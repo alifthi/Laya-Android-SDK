@@ -49,6 +49,9 @@ void laya_model_free(laya_model * model);
 
 void laya_context_free(laya_context * ctx);
 
+int32_t laya_build_sequence(const laya_model * model, const char * state, const struct laya_question * q,
+                            int32_t * tokens, int32_t n_max, int32_t * markers);
+
 #ifdef __cplusplus
 }
 #endif
