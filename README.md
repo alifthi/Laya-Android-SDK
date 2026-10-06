@@ -1,4 +1,4 @@
-# laya-cpp
+# Laya Android SDK
 
 A C/C++ inference library for [Laya](https://huggingface.co/convaiinnovations/laya) decision models, built on ggml.
 
