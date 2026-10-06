@@ -1,10 +1,13 @@
 #ifndef LAYA_MODEL_H
 #define LAYA_MODEL_H
 
+#include "tokenizer.h"
 #include "llama.h"
 #include "ggml.h"
 #include "gguf.h"
 #include "ggml-backend.h"
+
+
 #include <string>
 #include <vector>
 #include <map>
@@ -82,6 +85,5 @@ bool init_encoder(laya_model * model, const gguf_context * ctx);
 
 bool init_decision_head(laya_model * model, const gguf_context * ctx);
 
-static bool load_tokenizer(laya_model * m, const char * path);
 
 #endif // LAYA_MODEL_H

@@ -4,6 +4,8 @@
 #include "ggml.h"
 #include "gguf.h"
 #include "ggml-backend.h"
+#include "tokenizer.h"
+
 #include <string.h>
 #include <cmath>
 #include <thread>
