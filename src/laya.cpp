@@ -1,5 +1,6 @@
 // llama.cpp is only used to load the tokenizer from the same file (vocab_only) and run its BPE.
 #include "laya.h"
+#include "laya-model.h"
 #include "llama.h"
 #include "ggml.h"
 #include "gguf.h"

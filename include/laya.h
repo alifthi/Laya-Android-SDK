@@ -1,12 +1,13 @@
 #ifndef LAYA_H
 #define LAYA_H
 
-#include "laya-model.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+typedef struct laya_model   laya_model;
 typedef struct laya_context laya_context;
 
 enum laya_qtype {

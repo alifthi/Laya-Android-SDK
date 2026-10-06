@@ -1,4 +1,5 @@
 #include "laya.h"
+#include "laya-model.h"
 #include "llama.h"
 
 #include <vector>
