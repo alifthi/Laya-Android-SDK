@@ -256,7 +256,6 @@ static void usage(const char * argv0) {
             "      --tokenize TEXT   print the token ids of TEXT and exit\n"
             "      --sequence        print the encoder input ids / markers per question instead of answering\n"
             "      --bench N         run every request N times and report timing to stderr\n"
-            "      --no-mmap         read the weights into memory instead of mapping the file\n"
             "  -v, --verbose         show ggml / llama.cpp logs\n",
             argv0);
 }

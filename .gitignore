@@ -1,0 +1,4 @@
+build/
+.venv
+models/
+__pycache__/
